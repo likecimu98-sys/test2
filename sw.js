@@ -1,8 +1,9 @@
-const CACHE_NAME = 'tutor-app-v4';
+const CACHE_NAME = 'tutor-app-v16';
 const ASSETS = [
   './',
   './index.html',
-  './app.js',
+  './financeLogic.js?v=2',
+  './app.js?v=15',
   './vendor/react.production.min.js',
   './vendor/react-dom.production.min.js',
   './manifest.json',
@@ -23,16 +24,19 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const fetched = fetch(e.request).then(response => {
-        if (response && response.status === 200) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
-        }
-        return response;
-      }).catch(() => cached);
-      return cached || fetched;
-    })
+    fetch(e.request).then(response => {
+      if (response && response.status === 200) {
+        try {
+          const url = new URL(e.request.url);
+          if (url.origin === self.location.origin) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+          }
+        } catch {}
+      }
+      return response;
+    }).catch(() => caches.match(e.request))
   );
 });

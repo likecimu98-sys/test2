@@ -481,7 +481,8 @@ const saveState = data => {
   }));
   return savedAt;
 };
-const txDelta = tx => tx.type === 'payment' ? Number(tx.amount || 0) : -Number(tx.amount || 0);
+const financeCore = window.TutorFinanceLogic;
+const txDelta = financeCore.txDelta;
 const getLessonSubject = (lesson, groups) => {
   if (lesson.subject) return lesson.subject;
   if (lesson.type === 'group') return groups.find(g => g.id === lesson.targetId)?.subject || 'История';
@@ -937,9 +938,9 @@ function UndoToast({
       left: '50%',
       transform: 'translateX(-50%)',
       zIndex: 9999,
-      background: 'var(--black)',
-      color: 'var(--white)',
-      border: '2.5px solid var(--black)',
+      background: 'var(--ink)',
+      color: '#fffdf2',
+      border: '2.5px solid var(--ink)',
       borderRadius: 4,
       boxShadow: '4px 4px 0 rgba(0,0,0,.4)',
       display: 'flex',
@@ -2237,7 +2238,7 @@ function LessonModal({
               fontFamily: 'Unbounded,cursive',
               fontSize: 10,
               fontWeight: 700,
-              background: days.includes(i) ? 'var(--black)' : 'var(--surface)',
+              background: days.includes(i) ? 'var(--ink)' : 'var(--surface)',
               color: days.includes(i) ? 'var(--yellow)' : 'var(--black)',
               boxShadow: days.includes(i) ? 'none' : 'var(--shadow)'
             },
@@ -3460,10 +3461,7 @@ function MessageModal({
             gap: 8
           },
           children: [_jsxs("div", {
-            style: {
-              flex: 1,
-              minWidth: 0
-            },
+            className: "today-close-body",
             children: [_jsx("div", {
               style: {
                 fontWeight: 700,
@@ -3999,7 +3997,7 @@ function TipsModal({
           height: 4,
           borderRadius: 2,
           cursor: 'pointer',
-          background: i === idx ? 'var(--black)' : '#ddd',
+          background: i === idx ? 'var(--ink)' : '#ddd',
           transition: 'background .2s'
         }
       }, i))
@@ -4067,7 +4065,7 @@ function App() {
   // ── Undo system ──
   const [pendingUndo, setPendingUndo] = useState(null);
   const undoTimerRef = useRef(null);
-  const triggerUndo = (label, snapL, snapS, snapT, snapG) => {
+  const triggerUndo = (label, snapL, snapS, snapT, snapG, timeoutMs = 4000) => {
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     setPendingUndo({
       label,
@@ -4078,7 +4076,7 @@ function App() {
         if (snapG !== undefined) setGroups(snapG);
       }
     });
-    undoTimerRef.current = setTimeout(() => setPendingUndo(null), 4000);
+    undoTimerRef.current = setTimeout(() => setPendingUndo(null), timeoutMs);
   };
   const handleUndo = () => {
     if (!pendingUndo) return;
@@ -4187,12 +4185,10 @@ function App() {
   }, [settings.theme]);
 
   // ── handlers ──
-  const applyBalanceDelta = (studentId, delta) => {
-    setStudents(p => p.map(s => s.id === studentId ? {
-      ...s,
-      balance: s.balance + delta
-    } : s));
-  };
+  const lessonFinanceStudents = lesson => getLessonStudents(lesson, students, groups).map(student => ({
+    ...student,
+    rate: getLessonRate(lesson, student, groups)
+  }));
   const saveStudent = data => {
     const edit = modal?.payload;
     if (edit) setStudents(p => p.map(s => s.id === edit.id ? {
@@ -4259,43 +4255,33 @@ function App() {
   };
   const saveTx = data => {
     const edit = modal?.type === 'transaction' && modal?.payload?.id ? modal?.payload : null;
-    if (edit) {
-      const nextTx = {
-        ...edit,
-        ...data
-      };
-      setTxs(p => p.map(tx => tx.id === edit.id ? nextTx : tx));
-      applyBalanceDelta(edit.studentId, -txDelta(edit));
-      applyBalanceDelta(nextTx.studentId, txDelta(nextTx));
-    } else {
-      const tx = {
-        ...data,
-        id: Date.now()
-      };
-      setTxs(p => [tx, ...p]);
-      applyBalanceDelta(data.studentId, txDelta(tx));
-    }
+    const nextState = financeCore.saveTransactionState({
+      students,
+      txs,
+      data,
+      edit,
+      createId: Date.now
+    });
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
     setModal(null);
   };
   const delTx = tx => {
     const snapS = [...students],
       snapT = [...txs];
     const student = students.find(s => s.id === tx.studentId);
-    recordDeletion(`Операция ${student?.name || 'ученика'} ${money(tx.amount)}`, () => {
+    recordDeletion(`РћРїРµСЂР°С†РёСЏ ${student?.name || 'СѓС‡РµРЅРёРєР°'} ${money(tx.amount)}`, () => {
       setStudents(snapS);
       setTxs(snapT);
     });
-    setTxs(p => p.filter(t => t.id !== tx.id));
-    if (tx.kind === 'package' && tx.packageLessons) {
-      setStudents(p => p.map(s => s.id === tx.studentId ? {
-        ...s,
-        balance: s.balance - txDelta(tx),
-        packageLessons: Math.max(0, (s.packageLessons || 0) - tx.packageLessons)
-      } : s));
-    } else {
-      applyBalanceDelta(tx.studentId, -txDelta(tx));
-    }
-    triggerUndo('Операция удалена', lessons, snapS, snapT);
+    const nextState = financeCore.deleteTransactionState({
+      students,
+      txs,
+      tx
+    });
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
+    triggerUndo('РћРїРµСЂР°С†РёСЏ СѓРґР°Р»РµРЅР°', lessons, snapS, snapT);
   };
   const confirmLessonConflicts = (items, ignoreId = null) => {
     const arr = Array.isArray(items) ? items : [items];
@@ -4372,24 +4358,18 @@ function App() {
     setModal(null);
   };
   const savePackage = (studentId, lessonsCount, amount) => {
-    setStudents(p => p.map(s => s.id === studentId ? {
-      ...s,
-      balance: s.balance + (amount > 0 ? amount : 0),
-      packageLessons: (s.packageLessons || 0) + lessonsCount
-    } : s));
-    if (amount > 0) {
-      const tx = {
-        id: Date.now(),
-        studentId,
-        type: 'payment',
-        amount,
-        date: getTodayDate(),
-        comment: `Абонемент: ${lessonsCount} зан.`,
-        kind: 'package',
-        packageLessons: lessonsCount
-      };
-      setTxs(p => [tx, ...p]);
-    }
+    const nextState = financeCore.buyPackageState({
+      students,
+      txs,
+      studentId,
+      lessonsCount,
+      amount,
+      date: getTodayDate(),
+      comment: `РђР±РѕРЅРµРјРµРЅС‚: ${lessonsCount} Р·Р°РЅ.`,
+      createId: Date.now
+    });
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
     setModal(null);
   };
   const delLesson = (id, e) => {
@@ -4406,103 +4386,66 @@ function App() {
     if (lesson?.status === 'no_show') {
       removeNoShowCharges(id);
     } else if (lesson?.status === 'completed') {
-      const grp = lesson.type === 'group' ? groups.find(g => g.id === lesson.targetId) : null;
-      const refunds = [];
-      const upd = {};
-      const pkgRefunds = [];
-      Object.entries(lesson.attendance || {}).forEach(([sid, pres]) => {
-        if (!pres) return;
-        const s = students.find(st => st.id === Number(sid));
-        if (!s) return;
-        if (lesson.packageUse?.[s.id]) {
-          pkgRefunds.push(s.id);
-        }
-        const rate = grp?.rateOverrides?.[s.id] ?? s.rate;
-        refunds.push({
-          id: Date.now() + Math.random(),
-          studentId: s.id,
-          type: 'payment',
-          amount: rate,
-          date: getTodayDate(),
-          comment: lesson.packageUse?.[s.id] ? `Возврат урока по абонементу: ${fmtDate(lesson.date)}` : `Отмена: ${fmtDate(lesson.date)}`,
-          lessonId: id,
-          kind: 'attendance'
-        });
-        upd[s.id] = (upd[s.id] || 0) + rate;
+      const nextState = financeCore.refundCompletedLessonState({
+        students,
+        txs,
+        lesson,
+        lessonStudents: lessonFinanceStudents(lesson),
+        date: getTodayDate(),
+        lessonDateLabel: fmtDate(lesson.date),
+        createId: index => Date.now() + index + Math.random()
       });
-      if (refunds.length) setTxs(p => [...refunds, ...p]);
-      setStudents(p => p.map(s => upd[s.id] !== undefined || pkgRefunds.includes(s.id) ? {
-        ...s,
-        balance: s.balance + (upd[s.id] || 0),
-        packageLessons: (s.packageLessons || 0) + (pkgRefunds.includes(s.id) ? 1 : 0)
-      } : s));
+      setStudents(nextState.students);
+      setTxs(nextState.txs);
     }
     setLessons(p => p.filter(l => l.id !== id));
     setModal(null);
     triggerUndo('Занятие удалено', snapL, snapS, snapT);
   };
   const chargeNoShow = lesson => {
-    const already = txs.some(tx => tx.lessonId === lesson.id && tx.kind === 'no_show');
-    if (already) return;
-    const ls = getLessonStudents(lesson, students, groups);
-    const charges = ls.map((s, i) => ({
-      id: Date.now() + i + Math.random(),
-      studentId: s.id,
-      type: 'charge',
-      amount: getLessonRate(lesson, s, groups),
+    const nextState = financeCore.chargeNoShowState({
+      students,
+      txs,
+      lesson,
+      lessonStudents: lessonFinanceStudents(lesson),
       date: getTodayDate(),
-      comment: `Неявка: ${fmtDate(lesson.date)}`,
-      lessonId: lesson.id,
-      kind: 'no_show'
-    }));
-    if (!charges.length) return;
-    setTxs(p => [...charges, ...p]);
-    setStudents(p => p.map(s => {
-      const charge = charges.find(tx => tx.studentId === s.id);
-      return charge ? {
-        ...s,
-        balance: s.balance - charge.amount
-      } : s;
-    }));
+      lessonDateLabel: fmtDate(lesson.date),
+      createId: index => Date.now() + index + Math.random()
+    });
+    if (!nextState.addedTxs.length) return;
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
   };
   const removeNoShowCharges = lessonId => {
-    const own = txs.filter(tx => tx.lessonId === lessonId && tx.kind === 'no_show');
-    if (!own.length) return;
-    setTxs(p => p.filter(tx => !(tx.lessonId === lessonId && tx.kind === 'no_show')));
-    setStudents(p => p.map(s => {
-      const refund = own.filter(tx => tx.studentId === s.id).reduce((sum, tx) => sum + tx.amount, 0);
-      return refund ? {
-        ...s,
-        balance: s.balance + refund
-      } : s;
-    }));
+    const nextState = financeCore.removeLessonTransactionsState({
+      students,
+      txs,
+      lessonId,
+      kind: 'no_show'
+    });
+    if (!nextState.removedTxs.length) return;
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
   };
   const removeLessonAttendanceTxs = lessonId => {
-    const own = txs.filter(tx => tx.lessonId === lessonId && tx.kind === 'attendance');
-    if (!own.length) return;
-    setTxs(p => p.filter(tx => !(tx.lessonId === lessonId && tx.kind === 'attendance')));
-    setStudents(p => p.map(s => {
-      const delta = own.filter(tx => tx.studentId === s.id).reduce((sum, tx) => sum - txDelta(tx), 0);
-      return delta ? {
-        ...s,
-        balance: s.balance + delta
-      } : s;
-    }));
+    const lesson = lessons.find(l => l.id === lessonId);
+    const hasPackageUse = Object.values(lesson?.packageUse || {}).some(Boolean);
+    const nextState = financeCore.removeLessonTransactionsState({
+      students,
+      txs,
+      lessonId,
+      kind: 'attendance',
+      packageUse: hasPackageUse ? lesson.packageUse : null
+    });
+    if (!nextState.removedTxs.length && !hasPackageUse) return;
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
   };
   const setLessonStatus = (lessonId, status) => {
     const lesson = lessons.find(l => l.id === lessonId);
     if (!lesson) return;
     if (lesson.status === 'no_show' && status !== 'no_show') removeNoShowCharges(lessonId);
-    if (lesson.status === 'completed' && status !== 'completed') {
-      removeLessonAttendanceTxs(lessonId);
-      const pkgRefunds = Object.entries(lesson.packageUse || {}).filter(([, used]) => used).map(([sid]) => Number(sid));
-      if (pkgRefunds.length) {
-        setStudents(p => p.map(s => pkgRefunds.includes(s.id) ? {
-          ...s,
-          packageLessons: (s.packageLessons || 0) + 1
-        } : s));
-      }
-    }
+    if (lesson.status === 'completed' && status !== 'completed') removeLessonAttendanceTxs(lessonId);
     if (status === 'no_show') chargeNoShow(lesson);
     const attendance = status === 'no_show' ? Object.fromEntries(getLessonStudents(lesson, students, groups).map(s => [s.id, false])) : lesson.attendance;
     setLessons(p => p.map(l => l.id === lessonId ? {
@@ -4516,103 +4459,36 @@ function App() {
   const saveAttendance = (lessonId, newAtt, meta = {}) => {
     const lesson = lessons.find(l => l.id === lessonId);
     if (!lesson) return;
-    if (lesson.status === 'no_show') removeNoShowCharges(lessonId);
-    const ls = getLessonStudents(lesson, students, groups);
-
-    // KEY: always compute diff from the OLD attendance state
-    // For planned → completed: charge everyone who IS present now
-    // For completed → edited: only charge/refund the DELTA (who changed status)
-    const oldAtt = lesson.status === 'completed' && lesson.attendance ? lesson.attendance : {};
-    const newTxs = [];
-    const upd = {};
-    const updPkg = {};
-    const oldPackageUse = lesson.packageUse || {};
-    const nextPackageUse = {
-      ...oldPackageUse
-    };
-    ls.forEach(s => {
-      const was = !!oldAtt[s.id];
-      const is = !!newAtt[s.id];
-      const packageAvailable = (s.packageLessons || 0) + (updPkg[s.id] || 0);
-      if (lesson.status === 'planned') {
-        // First time completing: charge only present students
-        if (is) {
-          const rate = getLessonRate(lesson, s, groups);
-          if (packageAvailable > 0) {
-            updPkg[s.id] = (updPkg[s.id] || 0) - 1;
-            nextPackageUse[s.id] = true;
-          } else {
-            delete nextPackageUse[s.id];
-          }
-          newTxs.push({
-            id: Date.now() + Math.random(),
-            studentId: s.id,
-            type: 'charge',
-            amount: rate,
-            date: getTodayDate(),
-            comment: packageAvailable > 0 ? `Урок по абонементу: ${fmtDate(lesson.date)}` : `Урок: ${fmtDate(lesson.date)}`,
-            lessonId,
-            kind: 'attendance'
-          });
-          upd[s.id] = (upd[s.id] || 0) - rate;
-        }
-      } else {
-        // Already completed: only apply CHANGES
-        if (was === is) return; // no change — skip entirely (prevents double-counting)
-        const rate = getLessonRate(lesson, s, groups);
-        if (was && !is) {
-          if (oldPackageUse[s.id]) {
-            updPkg[s.id] = (updPkg[s.id] || 0) + 1;
-            delete nextPackageUse[s.id];
-          }
-          // Was present, now absent → refund
-          newTxs.push({
-            id: Date.now() + Math.random(),
-            studentId: s.id,
-            type: 'payment',
-            amount: rate,
-            date: getTodayDate(),
-            comment: oldPackageUse[s.id] ? `Возврат урока по абонементу: ${fmtDate(lesson.date)}` : `Возврат (отсутствовал): ${fmtDate(lesson.date)}`,
-            lessonId,
-            kind: 'attendance'
-          });
-          upd[s.id] = (upd[s.id] || 0) + rate;
-        } else {
-          if (packageAvailable > 0) {
-            updPkg[s.id] = (updPkg[s.id] || 0) - 1;
-            nextPackageUse[s.id] = true;
-          } else {
-            delete nextPackageUse[s.id];
-          }
-          // Was absent, now present → charge
-          newTxs.push({
-            id: Date.now() + Math.random(),
-            studentId: s.id,
-            type: 'charge',
-            amount: rate,
-            date: getTodayDate(),
-            comment: packageAvailable > 0 ? `Доп. списание по абонементу: ${fmtDate(lesson.date)}` : `Доп. списание (пришёл): ${fmtDate(lesson.date)}`,
-            lessonId,
-            kind: 'attendance'
-          });
-          upd[s.id] = (upd[s.id] || 0) - rate;
-        }
-      }
-    });
-    if (newTxs.length) {
-      setTxs(p => [...newTxs, ...p]);
+    let baseStudents = students;
+    let baseTxs = txs;
+    if (lesson.status === 'no_show') {
+      const cleanState = financeCore.removeLessonTransactionsState({
+        students,
+        txs,
+        lessonId,
+        kind: 'no_show'
+      });
+      baseStudents = cleanState.students;
+      baseTxs = cleanState.txs;
     }
-    setStudents(p => p.map(s => upd[s.id] !== undefined || updPkg[s.id] !== undefined ? {
-      ...s,
-      balance: s.balance + (upd[s.id] || 0),
-      packageLessons: Math.max(0, (s.packageLessons || 0) + (updPkg[s.id] || 0))
-    } : s));
+    const nextState = financeCore.saveAttendanceState({
+      students: baseStudents,
+      txs: baseTxs,
+      lesson,
+      lessonStudents: lessonFinanceStudents(lesson),
+      newAttendance: newAtt,
+      date: getTodayDate(),
+      lessonDateLabel: fmtDate(lesson.date),
+      createId: index => Date.now() + index + Math.random()
+    });
+    setStudents(nextState.students);
+    setTxs(nextState.txs);
     setLessons(p => p.map(l => l.id === lessonId ? {
       ...l,
       ...meta,
       status: 'completed',
       attendance: newAtt,
-      packageUse: nextPackageUse
+      packageUse: nextState.packageUse
     } : l));
     setModal(null);
   };
@@ -4854,31 +4730,6 @@ function App() {
       tone: todayLessons.some(l => l.lessonNote) ? 'warn' : 'quiet',
       action: () => setTab('schedule')
     }];
-    const fmtDataTime = iso => iso ? new Date(iso).toLocaleString('ru-RU', {
-      day: '2-digit',
-      month: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    }) : 'нет данных';
-    const storageStats = (() => {
-      try {
-        let bytes = 0;
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          const v = localStorage.getItem(k) || '';
-          bytes += (k.length + v.length) * 2;
-        }
-        return {
-          mb: bytes / 1024 / 1024,
-          percent: Math.min(100, Math.round(bytes / (5 * 1024 * 1024) * 100))
-        };
-      } catch {
-        return null;
-      }
-    })();
-    const backupAgeHours = lastBackupAt ? (Date.now() - new Date(lastBackupAt).getTime()) / 36e5 : Infinity;
-    const dataWarnings = [storageWarning, !lastBackupAt && 'Нет локальной копии данных.', backupAgeHours > 24 && lastBackupAt && 'Локальная копия старше суток.', storageStats?.percent > 75 && 'Память браузера почти заполнена.'].filter(Boolean);
-    const dataTone = dataWarnings.length ? storageWarning || storageStats?.percent > 75 ? 'danger' : 'warn' : 'good';
     // Active lesson detection
     const currentLesson = todayLessons.find(l => {
       if (l.status !== 'planned') return false;
@@ -4980,29 +4831,14 @@ function App() {
         secondary: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044C \u0434\u0435\u043C\u043E-\u0433\u0440\u0443\u043F\u043F\u0443",
         onSecondary: () => resetDemoData(groups.length || txs.length ? true : false)
       }), _jsxs("div", {
-        style: {
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
-          gap: 10,
-          marginBottom: 12
-        },
+        className: "today-stats-grid",
         children: [_jsxs("div", {
-          className: "stat-card",
-          style: {
-            background: 'var(--black)',
-            color: 'var(--yellow)'
-          },
+          className: "stat-card stat-card-ink",
           children: [_jsx("div", {
             className: "stat-label",
-            style: {
-              color: 'var(--text-muted)'
-            },
             children: "\u0423\u0440\u043E\u043A\u043E\u0432"
           }), _jsx("div", {
             className: "stat-value",
-            style: {
-              fontSize: 20
-            },
             children: todayLessons.length
           })]
         }), _jsxs("div", {
@@ -5012,29 +4848,15 @@ function App() {
             children: "\u0423\u0447\u0435\u043D\u0438\u043A\u043E\u0432"
           }), _jsx("div", {
             className: "stat-value",
-            style: {
-              fontSize: 20
-            },
             children: activeStudents.length
           })]
         }), _jsxs("div", {
-          className: "stat-card",
-          style: {
-            background: chargedToday > 0 ? 'var(--green)' : 'var(--white)'
-          },
+          className: `stat-card stat-card-earned ${chargedToday > 0 ? 'has-value' : ''} ${chargedToday >= 10000 ? 'has-large' : ''}`,
           children: [_jsx("div", {
             className: "stat-label",
-            style: {
-              color: chargedToday > 0 ? 'rgba(0,0,0,.6)' : 'var(--text-sec)'
-            },
             children: "\u0417\u0430\u0440\u0430\u0431\u043E\u0442\u0430\u043D\u043E"
           }), _jsx("div", {
             className: "stat-value",
-            style: {
-              fontSize: chargedToday >= 10000 ? 14 : chargedToday > 0 ? 16 : 20,
-              color: chargedToday > 0 ? '#fff' : 'var(--black)',
-              lineHeight: 1.2
-            },
             children: chargedToday > 0 ? money(chargedToday) : '—'
           })]
         })]
@@ -5056,105 +4878,24 @@ function App() {
             })]
           }, item.key))
         })]
-      }), _jsxs("section", {
-        className: `data-trust-panel ${dataTone}`,
-        children: [_jsxs("div", {
-          className: "data-trust-head",
-          children: [_jsxs("div", {
-            children: [_jsx("div", {
-              className: "data-trust-kicker",
-              children: "\u0414\u0430\u043d\u043d\u044b\u0435"
-            }), _jsx("div", {
-              className: "data-trust-title",
-              children: dataTone === 'good' ? "\u0412\u0441\u0451 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" : "\u041d\u0443\u0436\u043d\u043e \u0432\u043d\u0438\u043c\u0430\u043d\u0438\u0435"
-            })]
-          }), _jsx("span", {
-            className: "data-trust-status",
-            children: dataTone === 'good' ? 'OK' : dataTone === 'danger' ? 'РИСК' : 'ПРОВЕРЬ'
-          })]
-        }), _jsxs("div", {
-          className: "data-trust-grid",
-          children: [_jsxs("div", {
-            children: [_jsx("span", {
-              children: "\u0410\u0432\u0442\u043e\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435"
-            }), _jsx("strong", {
-              children: fmtDataTime(lastSavedAt)
-            })]
-          }), _jsxs("div", {
-            children: [_jsx("span", {
-              children: "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u0430\u044f \u043a\u043e\u043f\u0438\u044f"
-            }), _jsx("strong", {
-              children: fmtDataTime(lastBackupAt)
-            })]
-          }), _jsxs("div", {
-            children: [_jsx("span", {
-              children: "\u041e\u0431\u044a\u0451\u043c"
-            }), _jsx("strong", {
-              children: storageStats ? `${storageStats.mb.toFixed(2)} МБ` : 'нет доступа'
-            })]
-          }), _jsxs("div", {
-            children: [_jsx("span", {
-              children: "\u0417\u0430\u043f\u0438\u0441\u0438"
-            }), _jsxs("strong", {
-              children: [activeStudents.length, " уч. \xB7 ", groups.length, " гр. \xB7 ", lessons.length, " ур."]
-            })]
-          })]
-        }), dataWarnings.length > 0 && _jsx("div", {
-          className: "data-trust-warning",
-          children: dataWarnings[0]
-        }), _jsxs("div", {
-          className: "data-trust-actions",
-          children: [_jsx("button", {
-            className: "btn btn-sm btn-black",
-            onClick: exportJson,
-            children: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c"
-          }), _jsx("button", {
-            className: "btn btn-sm btn-white",
-            onClick: importJson,
-            children: "\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c"
-          }), _jsx("button", {
-            className: "btn btn-sm btn-white",
-            onClick: () => createLocalBackup(true),
-            children: "\u041a\u043e\u043f\u0438\u044f"
-          })]
-        })]
       }), _jsx("div", {
-        className: "card",
-        style: {
-          padding: 12,
-          marginBottom: 16
-        },
+        className: "card today-close-card",
         children: _jsxs("div", {
-          style: {
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 10
-          },
+          className: "today-close-row",
           children: [_jsxs("div", {
-            style: {
-              flex: 1,
-              minWidth: 0
-            },
+            className: "today-close-body",
             children: [_jsx("div", {
               className: "label",
               children: "\u0417\u0430\u043A\u0440\u044B\u0442\u0438\u0435 \u0434\u043D\u044F"
             }), _jsx("div", {
-              style: {
-                fontSize: 12,
-                lineHeight: 1.6
-              },
+              className: "today-close-text",
               children: nextLesson ? _jsxs(_Fragment, {
                 children: ["\u0421\u043B\u0435\u0434\u0443\u044E\u0449\u0438\u0439: ", _jsx("strong", {
                   children: nextLesson.time
                 }), " \xB7 ", getLessonName(nextLesson)]
               }) : 'Все уроки на сегодня обработаны'
             }), _jsxs("div", {
-              style: {
-                fontSize: 11,
-                color: 'var(--text-sec)',
-                marginTop: 4
-              },
+              className: "today-close-meta",
               children: ["\u041E\u043F\u043B\u0430\u0442\u044B: ", money(earnedToday), " \xB7 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F: ", money(chargedToday)]
             })]
           }), _jsxs("button", {
@@ -5431,12 +5172,7 @@ function App() {
         ref: swipeRef,
         className: "sched-swipe",
         children: [_jsxs("div", {
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 14
-          },
+          className: "week-nav",
           children: [_jsx("button", {
             className: "btn btn-sm btn-white",
             onClick: () => setWeekOffset(w => w - 1),
@@ -5444,21 +5180,12 @@ function App() {
               size: 16
             })
           }), _jsxs("div", {
-            style: {
-              textAlign: 'center'
-            },
+            className: "week-title-block",
             children: [_jsx("div", {
-              style: {
-                fontFamily: 'Unbounded,cursive',
-                fontSize: 11,
-                fontWeight: 900
-              },
+              className: "week-title",
               children: weekOffset === 0 ? 'ЭТА НЕДЕЛЯ' : weekOffset === 1 ? 'СЛЕДУЮЩАЯ' : weekOffset === -1 ? 'ПРОШЛАЯ' : `${weekOffset > 0 ? '+' : ''}${weekOffset} НЕД.`
             }), _jsxs("div", {
-              style: {
-                fontSize: 10,
-                color: 'var(--text-sec)'
-              },
+              className: "week-range",
               children: [fmtShort(wStart), " \u2014 ", fmtShort(wEnd)]
             })]
           }), _jsx("button", {
@@ -5470,13 +5197,13 @@ function App() {
           })]
         }), _jsxs("div", {
           className: "sched-mobile",
-          children: _jsxs("div", {
-            className: "mobile-week-layout",
+          children: [_jsxs("div", {
+            className: "mobile-week-shell",
             children: [_jsx("div", {
-              className: "mobile-week-dock",
+              className: "mobile-week-strip",
               children: weekDaySummaries.map(day => _jsxs("button", {
                 type: "button",
-                className: `mobile-week-dock-day ${mobileDay === day.index ? 'selected' : ''} ${day.isToday ? 'today' : ''}`,
+                className: `mobile-week-strip-day ${mobileDay === day.index ? 'selected' : ''} ${day.isToday ? 'today' : ''} ${day.lessons.length > 3 ? 'dense' : ''}`,
                 onClick: () => setMobileDay(day.index),
                 children: [_jsx("span", {
                   children: DAY_LABELS[day.index]
@@ -5484,204 +5211,167 @@ function App() {
                   children: day.num
                 }), _jsx("em", {
                   children: day.lessons.length || "0"
+                }), day.lessons[0] && _jsx("small", {
+                  children: day.lessons[0].time
                 })]
               }, day.date))
-            }), _jsx("div", {
-              className: "mobile-week-board",
-              children: weekDaySummaries.map(day => {
-                const selected = mobileDay === day.index;
-                return _jsxs("section", {
-                  className: `mobile-day-lane ${selected ? 'expanded' : ''} ${day.isToday ? 'today' : ''} ${day.lessons.length ? '' : 'empty'}`,
-                  children: [_jsxs("div", {
-                    className: "mobile-day-lane-head",
-                    onClick: () => setMobileDay(day.index),
-                    children: [_jsxs("div", {
-                      className: "mobile-day-date",
-                      children: [_jsx("span", {
-                        children: DAY_LABELS[day.index]
-                      }), _jsx("strong", {
-                        children: day.num
-                      })]
+            }), _jsxs("section", {
+              className: `mobile-selected-day ${mobileDayData?.isToday ? 'today' : ''}`,
+              children: [_jsxs("div", {
+                className: "mobile-selected-head",
+                children: [_jsxs("div", {
+                  children: [_jsx("span", {
+                    children: "Выбранный день"
+                  }), _jsx("strong", {
+                    children: new Date((mobileDayData?.date || weekDates[0]) + 'T00:00:00').toLocaleDateString('ru-RU', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long'
+                    })
+                  })]
+                }), _jsxs("div", {
+                  className: "mobile-selected-summary",
+                  children: [_jsxs("b", {
+                    children: [mobileDayLessons.length, " ур."]
+                  }), _jsx("button", {
+                    type: "button",
+                    onClick: () => setModal({
+                      type: 'lesson',
+                      payload: {
+                        date: mobileDayData?.date || weekDates[0]
+                      }
+                    }),
+                    children: "+"
+                  })]
+                })]
+              }), mobileDayLessons.length ? _jsx("div", {
+                className: "mobile-agenda-list",
+                children: mobileDayLessons.map(l => {
+                  const statusInfo = LESSON_STATUS[l.status] || LESSON_STATUS.planned;
+                  const markers = mobileMarkers(l);
+                  const sub = getLessonSubject(l, groups);
+                  return _jsxs("article", {
+                    className: `mobile-agenda-card ${l.type === 'group' ? 'group' : 'individual'} ${isFinalLesson(l) ? 'final' : ''}`,
+                    onClick: () => setModal({
+                      type: l.status === 'planned' || l.status === 'completed' ? 'attendance' : 'lessonStatus',
+                      payload: l
+                    }),
+                    children: [_jsx("div", {
+                      className: "mobile-agenda-time",
+                      children: l.time
                     }), _jsxs("div", {
-                      className: "mobile-day-caption",
-                      children: [_jsx("b", {
-                        children: selected ? "Выбранный день" : day.isToday ? "Сегодня" : fmtShort(day.date)
-                      }), _jsxs("span", {
-                        children: [day.lessons.length || "нет", " занятий"]
-                      })]
-                    }), selected && _jsx("button", {
-                      type: "button",
-                      className: "mobile-day-add",
-                      onClick: e => {
-                        e.stopPropagation();
-                        setModal({
-                          type: 'lesson',
-                          payload: {
-                            date: day.date
-                          }
-                        });
-                      },
-                      children: "+"
-                    })]
-                  }), day.lessons.length ? _jsx("div", {
-                    className: `mobile-day-lesson-list ${selected ? 'expanded' : 'compact'}`,
-                    children: day.lessons.slice(0, selected ? day.lessons.length : 3).map(l => {
-                      const statusInfo = LESSON_STATUS[l.status] || LESSON_STATUS.planned;
-                      const markers = mobileMarkers(l);
-                      const sub = getLessonSubject(l, groups);
-                      return selected ? _jsxs("article", {
-                        className: `mobile-day-lesson-card ${l.type === 'group' ? 'group' : 'individual'}`,
-                        onClick: () => setModal({
-                          type: l.status === 'planned' || l.status === 'completed' ? 'attendance' : 'lessonStatus',
-                          payload: l
-                        }),
-                        children: [_jsx("div", {
-                          className: "mobile-day-lesson-time",
-                          children: l.time
-                        }), _jsxs("div", {
-                          className: "mobile-day-lesson-body",
-                          children: [_jsxs("div", {
-                            className: "mobile-day-lesson-title",
-                            children: [_jsx("span", {
-                              children: getLessonName(l)
-                            }), markers.length > 0 && _jsx("span", {
-                              className: "mobile-day-dots",
-                              children: markers.slice(0, 5).map(([kind, title]) => _jsx("i", {
-                                className: `week-dot ${kind}`,
-                                title: title
-                              }, kind))
-                            })]
-                          }), _jsxs("div", {
-                            className: "mobile-day-lesson-meta",
-                            children: [_jsx("span", {
-                              children: sub
-                            }), _jsx("span", {
-                              children: statusInfo.label
-                            }), l.duration && l.duration !== 60 && _jsx("span", {
-                              children: l.duration < 60 ? `${l.duration}м` : l.duration === 90 ? '1.5ч' : '2ч'
-                            })]
-                          })]
-                        }), _jsxs("div", {
-                          className: "mobile-day-actions",
-                          children: [l.status === 'planned' ? _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-action-main",
-                            onClick: e => {
-                              e.stopPropagation();
-                              setModal({
-                                type: 'attendance',
-                                payload: l
-                              });
-                            },
-                            children: _jsx(IcoPlay, {
-                              size: 14
-                            })
-                          }) : l.status === 'completed' ? _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-icon-btn",
-                            onClick: e => {
-                              e.stopPropagation();
-                              setModal({
-                                type: 'attendance',
-                                payload: l
-                              });
-                            },
-                            children: _jsx(IcoCheck, {
-                              size: 14
-                            })
-                          }) : _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-icon-btn",
-                            onClick: e => {
-                              e.stopPropagation();
-                              setModal({
-                                type: 'lessonStatus',
-                                payload: l
-                              });
-                            },
-                            children: _jsx(IcoRepeat, {
-                              size: 14
-                            })
-                          }), _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-icon-btn",
-                            title: "Перенести",
-                            onClick: e => {
-                              e.stopPropagation();
-                              setModal({
-                                type: 'reschedule',
-                                payload: {
-                                  lesson: l
-                                }
-                              });
-                            },
-                            children: _jsx(IcoRepeat, {
-                              size: 15
-                            })
-                          }), _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-icon-btn",
-                            onClick: e => {
-                              e.stopPropagation();
-                              setModal({
-                                type: 'lesson',
-                                payload: {
-                                  lesson: l
-                                }
-                              });
-                            },
-                            children: _jsx(IcoEdit, {
-                              size: 15
-                            })
-                          }), _jsx("button", {
-                            type: "button",
-                            className: "mobile-day-icon-btn danger",
-                            onClick: e => {
-                              e.stopPropagation();
-                              delLesson(l.id, e);
-                            },
-                            children: _jsx(IcoTrash, {
-                              size: 15
-                            })
-                          })]
-                        })]
-                      }, l.id) : _jsxs("button", {
-                        type: "button",
-                        className: "mobile-day-brief",
-                        onClick: () => setMobileDay(day.index),
-                        children: [_jsx("b", {
-                          children: l.time
-                        }), _jsx("span", {
+                      className: "mobile-agenda-body",
+                      children: [_jsxs("div", {
+                        className: "mobile-agenda-title",
+                        children: [_jsx("span", {
                           children: getLessonName(l)
                         }), markers.length > 0 && _jsx("em", {
-                          children: markers.slice(0, 3).map(([kind, title]) => _jsx("i", {
+                          children: markers.slice(0, 4).map(([kind, title]) => _jsx("i", {
                             className: `week-dot ${kind}`,
                             title: title
                           }, kind))
                         })]
-                      }, l.id);
-                    })
-                  }) : selected ? _jsx("button", {
-                    type: "button",
-                    className: "mobile-day-empty-add",
-                    onClick: () => setModal({
-                      type: 'lesson',
-                      payload: {
-                        date: day.date
-                      }
-                    }),
-                    children: "Свободно · добавить занятие"
-                  }) : _jsx("div", {
-                    className: "mobile-day-empty-note",
-                    children: "свободно"
-                  }), !selected && day.lessons.length > 3 && _jsxs("button", {
-                    type: "button",
-                    className: "mobile-day-more",
-                    onClick: () => setMobileDay(day.index),
-                    children: ["Ещё ", day.lessons.length - 3]
-                  })]
-                }, day.date);
-              })
+                      }), _jsxs("div", {
+                        className: "mobile-agenda-meta",
+                        children: [_jsx("span", {
+                          children: sub
+                        }), _jsx("span", {
+                          children: statusInfo.label
+                        }), l.duration && l.duration !== 60 && _jsx("span", {
+                          children: l.duration < 60 ? `${l.duration}м` : l.duration === 90 ? '1.5ч' : '2ч'
+                        })]
+                      })]
+                    }), _jsxs("div", {
+                      className: "mobile-agenda-actions",
+                      children: [l.status === 'planned' ? _jsx("button", {
+                        type: "button",
+                        className: "mobile-agenda-main",
+                        title: "Провести",
+                        onClick: e => {
+                          e.stopPropagation();
+                          setModal({
+                            type: 'attendance',
+                            payload: l
+                          });
+                        },
+                        children: _jsx(IcoPlay, {
+                          size: 14
+                        })
+                      }) : l.status === 'completed' ? _jsx("button", {
+                        type: "button",
+                        className: "mobile-agenda-icon",
+                        title: "Посещение",
+                        onClick: e => {
+                          e.stopPropagation();
+                          setModal({
+                            type: 'attendance',
+                            payload: l
+                          });
+                        },
+                        children: _jsx(IcoCheck, {
+                          size: 14
+                        })
+                      }) : _jsx("button", {
+                        type: "button",
+                        className: "mobile-agenda-icon",
+                        title: "Статус",
+                        onClick: e => {
+                          e.stopPropagation();
+                          setModal({
+                            type: 'lessonStatus',
+                            payload: l
+                          });
+                        },
+                        children: _jsx(IcoRepeat, {
+                          size: 14
+                        })
+                      }), _jsx("button", {
+                        type: "button",
+                        className: "mobile-agenda-icon",
+                        title: "Перенести",
+                        onClick: e => {
+                          e.stopPropagation();
+                          setModal({
+                            type: 'reschedule',
+                            payload: {
+                              lesson: l
+                            }
+                          });
+                        },
+                        children: _jsx(IcoRepeat, {
+                          size: 14
+                        })
+                      }), _jsx("button", {
+                        type: "button",
+                        className: "mobile-agenda-icon",
+                        title: "Изменить",
+                        onClick: e => {
+                          e.stopPropagation();
+                          setModal({
+                            type: 'lesson',
+                            payload: {
+                              lesson: l
+                            }
+                          });
+                        },
+                        children: _jsx(IcoEdit, {
+                          size: 14
+                        })
+                      })]
+                    })]
+                  }, l.id);
+                })
+              }) : _jsx("button", {
+                type: "button",
+                className: "mobile-selected-empty",
+                onClick: () => setModal({
+                  type: 'lesson',
+                  payload: {
+                    date: mobileDayData?.date || weekDates[0]
+                  }
+                }),
+                children: "Нет занятий · добавить"
+              })]
             }), _jsxs("div", {
               className: "week-marker-legend",
               children: [_jsxs("span", {
@@ -5696,13 +5386,9 @@ function App() {
                 children: [_jsx("i", {
                   className: "week-dot debt"
                 }), "долг"]
-              }), _jsxs("span", {
-                children: [_jsx("i", {
-                  className: "week-dot series"
-                }), "серия"]
               })]
             })]
-          })
+          })]
         }), _jsx("div", {
           className: "sched-desktop",
           children: _jsx("div", {
@@ -5712,9 +5398,7 @@ function App() {
               children: [_jsx("thead", {
                 children: _jsxs("tr", {
                   children: [_jsx("th", {
-                    style: {
-                      width: 52
-                    }
+                    className: "schedule-time-head"
                   }), weekDates.map((d, i) => {
                     const isToday = d === today;
                     const num = new Date(d + 'T00:00:00').getDate();
@@ -5722,15 +5406,10 @@ function App() {
                       onClick: () => setSelDate(d),
                       className: `schedule-head-cell ${isToday ? 'today' : ''} ${selDate === d ? 'selected' : ''}`,
                       children: [_jsx("div", {
-                        style: {
-                          fontSize: 10
-                        },
+                        className: "schedule-head-weekday",
                         children: DAY_LABELS[i]
                       }), _jsx("div", {
-                        style: {
-                          fontSize: 24,
-                          lineHeight: 1.05
-                        },
+                        className: "schedule-head-daynum",
                         children: num
                       })]
                     }, d);
@@ -5741,15 +5420,7 @@ function App() {
                   children: _jsx("td", {
                     colSpan: 8,
                     children: _jsx("div", {
-                      style: {
-                        textAlign: 'center',
-                        padding: '32px 0',
-                        fontFamily: 'Unbounded,cursive',
-                        fontSize: 12,
-                        color: 'var(--text-muted)',
-                        border: '2.5px dashed var(--border-dashed)',
-                        borderRadius: 4
-                      },
+                      className: "schedule-empty-week",
                       children: "\u0423\u0440\u043E\u043A\u043E\u0432 \u043D\u0430 \u044D\u0442\u0443 \u043D\u0435\u0434\u0435\u043B\u044E \u043D\u0435\u0442"
                     })
                   })
@@ -5766,10 +5437,7 @@ function App() {
                       const cell = byDay[di] || [];
                       if (cell.length === 0) {
                         return _jsx("td", {
-                          style: {
-                            padding: 2,
-                            verticalAlign: 'top'
-                          },
+                          className: "schedule-grid-cell",
                           children: _jsx("div", {
                             onClick: () => setModal({
                               type: 'lesson',
@@ -5788,10 +5456,7 @@ function App() {
                         }, di);
                       }
                       return _jsx("td", {
-                        style: {
-                          padding: 2,
-                          verticalAlign: 'top'
-                        },
+                        className: "schedule-grid-cell",
                         onDragOver: e => e.preventDefault(),
                         onDrop: e => {
                           e.preventDefault();
@@ -5814,10 +5479,6 @@ function App() {
                               payload: l
                             }),
                             className: `schedule-lesson-cell ${done ? 'done' : 'planned'} ${l.type === 'group' ? 'group' : 'individual'} ${hasConflict ? 'conflict' : ''}`,
-                            onMouseEnter: e => {
-                              if (!done) e.currentTarget.style.transform = 'translateY(-2px)';
-                            },
-                            onMouseLeave: e => e.currentTarget.style.transform = 'none',
                             children: [(() => {
                               const stList = getLessonStudents(l, students, groups);
                               const hasDebt = stList.some(s => s.balance < 0);
@@ -5866,46 +5527,26 @@ function App() {
               })]
             })
           })
-        }), false && selDate && weekDates.includes(selDate) && (() => {
+        }), selDate && weekDates.includes(selDate) && (() => {
           const dl = scheduleLessons.filter(l => l.date === selDate).sort((a, b) => a.time.localeCompare(b.time));
           const obj = new Date(selDate + 'T00:00:00');
+          const title = obj.toLocaleDateString('ru-RU', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long'
+          }).toUpperCase();
           return _jsxs("div", {
-            style: {
-              marginTop: 16,
-              border: 'var(--border)',
-              borderRadius: 4,
-              overflow: 'hidden',
-              boxShadow: 'var(--shadow)'
-            },
+            className: "desktop-selected-day-panel",
             children: [_jsxs("div", {
-              style: {
-                background: 'var(--black)',
-                color: 'var(--yellow)',
-                padding: '8px 12px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              },
-              children: [_jsx("span", {
-                style: {
-                  fontFamily: 'Unbounded,cursive',
-                  fontSize: 11,
-                  fontWeight: 900
-                },
-                children: obj.toLocaleDateString('ru-RU', {
-                  weekday: 'long',
-                  day: 'numeric',
-                  month: 'long'
-                }).toUpperCase()
+              className: "desktop-selected-day-head",
+              children: [_jsxs("div", {
+                children: [_jsx("span", {
+                  children: "\u0412\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0439 \u0434\u0435\u043D\u044C"
+                }), _jsx("strong", {
+                  children: title
+                })]
               }), _jsx("button", {
-                className: "btn btn-sm",
-                style: {
-                  padding: '4px 8px',
-                  fontSize: 9,
-                  background: 'var(--yellow)',
-                  color: 'var(--black)',
-                  boxShadow: 'none'
-                },
+                className: "btn btn-sm desktop-selected-add",
                 onClick: () => setModal({
                   type: 'lesson',
                   payload: {
@@ -5914,123 +5555,37 @@ function App() {
                 }),
                 children: "+ \u0423\u0420\u041E\u041A"
               })]
-            }), dl.length === 0 ? _jsx("div", {
-              style: {
-                padding: '16px',
-                textAlign: 'center',
-                fontFamily: 'Unbounded,cursive',
-                fontSize: 11,
-                color: 'var(--text-muted)'
-              },
-              children: "\u041D\u0435\u0442 \u0437\u0430\u043D\u044F\u0442\u0438\u0439"
-            }) : dl.map(l => {
-              const stList = getLessonStudents(l, students, groups);
-              const hasDebt = stList.some(s => s.balance < 0);
-              return _jsxs("div", {
-                style: {
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 12px',
-                  borderTop: '1.5px solid var(--border-light)'
-                },
-                children: [_jsxs("div", {
-                  style: {
-                    fontFamily: 'Unbounded,cursive',
-                    fontSize: 14,
-                    fontWeight: 900,
-                    minWidth: 48,
-                    color: isFinalLesson(l) ? 'var(--text-muted)' : 'var(--black)'
-                  },
-                  children: [_jsx("div", {
-                    children: l.time
-                  }), l.duration && l.duration !== 60 && _jsx("div", {
-                    style: {
-                      fontSize: 9,
-                      fontWeight: 400,
-                      color: 'var(--text-sec)',
-                      marginTop: 1
-                    },
-                    children: l.duration < 60 ? `${l.duration}м` : l.duration === 90 ? '1.5ч' : '2ч'
-                  })]
-                }), _jsxs("div", {
-                  style: {
-                    flex: 1,
-                    minWidth: 0
-                  },
-                  children: [_jsx("div", {
-                    style: {
-                      fontFamily: 'Unbounded,cursive',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      lineHeight: 1.3,
-                      color: isFinalLesson(l) ? 'var(--text-muted)' : 'var(--black)'
-                    },
-                    children: getLessonName(l)
-                  }), hasDebt && _jsx("div", {
-                    style: {
-                      fontSize: 9,
-                      color: 'var(--red)',
-                      fontFamily: 'Unbounded,cursive',
-                      fontWeight: 700,
-                      marginTop: 2
-                    },
-                    children: "\u25CF \u0414\u041E\u041B\u0413"
-                  })]
-                }), l.status === 'planned' ? _jsx("button", {
-                  className: "btn btn-sm btn-green",
-                  onClick: () => setModal({
-                    type: 'attendance',
-                    payload: l
-                  }),
-                  children: _jsx(IcoPlay, {
-                    size: 13
-                  })
-                }) : l.status === 'completed' ? _jsx("button", {
-                  className: "btn btn-sm btn-white",
-                  onClick: () => setModal({
-                    type: 'attendance',
-                    payload: l
-                  }),
-                  children: _jsx(IcoCheck, {
-                    size: 13
-                  })
-                }) : _jsx("button", {
-                  className: "btn btn-sm btn-white",
-                  onClick: () => setModal({
-                    type: 'lessonStatus',
-                    payload: l
-                  }),
-                  children: LESSON_STATUS[l.status]?.label || l.status
-                }), _jsx("button", {
-                  style: {
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 4,
-                    color: 'var(--text-muted)'
-                  },
-                  onClick: () => setModal({
-                    type: 'lessonStatus',
-                    payload: l
-                  }),
-                  children: _jsx(IcoEdit, {
-                    size: 15
-                  })
-                }), _jsx("button", {
-                  style: {
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    padding: 4,
-                    color: 'var(--text-muted)'
-                  },
-                  onClick: e => delLesson(l.id, e),
-                  children: _jsx(IcoTrash, {
-                    size: 15
-                  })
-                })]
-              }, l.id);
+            }), dl.length === 0 ? _jsx("button", {
+              type: "button",
+              className: "desktop-selected-empty",
+              onClick: () => setModal({
+                type: 'lesson',
+                payload: {
+                  date: selDate
+                }
+              }),
+              children: "\u041D\u0435\u0442 \u0443\u0440\u043E\u043A\u043E\u0432 \u00B7 \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0437\u0430\u043D\u044F\u0442\u0438\u0435"
+            }) : _jsx("div", {
+              className: "desktop-selected-day-list",
+              children: dl.map(l => _jsx(LessonCard, {
+                lesson: l,
+                name: getLessonName(l),
+                onAttend: () => setModal({
+                  type: 'attendance',
+                  payload: l
+                }),
+                onStatus: () => setModal({
+                  type: 'lessonStatus',
+                  payload: l
+                }),
+                onEdit: () => setModal({
+                  type: 'lesson',
+                  payload: {
+                    lesson: l
+                  }
+                }),
+                onDelete: e => delLesson(l.id, e)
+              }, l.id))
             })]
           });
         })()]
@@ -6814,15 +6369,20 @@ function App() {
 
     // Safe quick-pay: only pays the exact outstanding debt (not arbitrary amount)
     const quickPay = studentId => {
-      const s = students.find(st => st.id === studentId);
-      if (!s || s.balance >= 0) return;
-      saveTx({
+      const snapS = [...students],
+        snapT = [...txs];
+      const nextState = financeCore.quickDebtPaymentState({
+        students,
+        txs,
         studentId,
-        type: 'payment',
-        amount: Math.abs(s.balance),
         date: getTodayDate(),
-        comment: 'Быстрая оплата долга'
+        comment: 'Р‘С‹СЃС‚СЂР°СЏ РѕРїР»Р°С‚Р° РґРѕР»РіР°',
+        createId: Date.now
       });
+      if (!nextState.tx) return;
+      setStudents(nextState.students);
+      setTxs(nextState.txs);
+      triggerUndo('РћРїР»Р°С‚Р° РґРѕР±Р°РІР»РµРЅР°', lessons, snapS, snapT, undefined, 3000);
     };
 
     // ── ANALYTICS ───────────────────────────────────────────────────────────
@@ -7297,7 +6857,11 @@ function App() {
               },
               children: [tx.type === 'payment' ? '+' : '-', money(tx.amount)]
             }), !tx.lessonId && _jsxs(_Fragment, {
-              children: [_jsx("button", {
+              children: [tx.type === 'payment' && _jsx("button", {
+                className: "tx-cancel-btn",
+                onClick: () => delTx(tx),
+                children: "\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C"
+              }), _jsx("button", {
                 style: {
                   background: 'none',
                   border: 'none',
@@ -7405,7 +6969,7 @@ function App() {
             border: 'var(--border)',
             borderRadius: 4,
             cursor: 'pointer',
-            background: analyticsPeriod === v ? 'var(--black)' : 'var(--white)',
+            background: analyticsPeriod === v ? 'var(--ink)' : 'var(--white)',
             color: analyticsPeriod === v ? 'var(--yellow)' : 'var(--black)',
             boxShadow: analyticsPeriod === v ? 'none' : 'var(--shadow)'
           },
@@ -7922,7 +7486,7 @@ function App() {
     }), _jsxs("div", {
       className: "main",
       children: [tab === 'today' && _jsx(PageToday, {}), tab === 'schedule' && _jsx(PageSchedule, {}), tab === 'students' && _jsx(PageStudents, {}), tab === 'finance' && _jsx(PageFinance, {})]
-    }), (tab === 'today' || tab === 'schedule' && schedView !== 'month') && _jsxs(_Fragment, {
+    }), tab === 'today' && _jsxs(_Fragment, {
       children: [fabOpen && _jsx("div", {
         className: "fab-overlay",
         onClick: () => setFabOpen(false)
@@ -8267,7 +7831,7 @@ function LessonCard({
     }), _jsxs("div", {
       className: "lesson-time",
       style: {
-        background: done ? 'var(--done-bg)' : 'var(--black)',
+        background: done ? 'var(--done-bg)' : 'var(--ink)',
         minWidth: compact ? 52 : 62,
         fontSize: compact ? 12 : 14
       },
@@ -8383,9 +7947,9 @@ function LessonCard({
         },
         onClick: e => {
           e.stopPropagation();
-          onEdit();
+          onStatus();
         },
-        children: _jsx(IcoEdit, {
+        children: _jsx(IcoRepeat, {
           size: 16
         })
       }), _jsx("button", {
@@ -8398,9 +7962,9 @@ function LessonCard({
         },
         onClick: e => {
           e.stopPropagation();
-          onStatus();
+          onEdit();
         },
-        children: _jsx(IcoRepeat, {
+        children: _jsx(IcoEdit, {
           size: 16
         })
       }), _jsx("button", {
